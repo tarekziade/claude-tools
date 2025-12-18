@@ -1,695 +1,440 @@
-# Claude Code Configuration for claude-tools
+# CLAUDE.md
 
-This file contains instructions and configuration for working on the claude-tools project with Claude Code.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-**claude-tools** is a Python package that provides hooks and utilities for Claude Code. The primary tool is a traceback compactor that intelligently reduces Python stack traces to save tokens while preserving essential debugging information.
+**claude-tools** is a Python package providing hooks and utilities for Claude Code. The primary tool is a traceback compactor that intelligently reduces Python stack traces to save tokens while preserving debugging information.
 
-## Quick Start with Makefile
+**Core Design Principles:**
+- Zero runtime dependencies (pure Python stdlib)
+- Fast execution (runs as CLI hook with timeouts)
+- Python 3.8+ compatibility
+- Deterministic and testable
 
-The project is fully driven by a Makefile. All common tasks can be executed using `make` commands:
+## Quick Start Commands
 
 ```bash
-# First time setup
-make install-dev        # Install with development dependencies
-make verify-install     # Verify everything works
+# Development setup
+make install-dev        # Install with dev dependencies (ruff, coverage)
+make verify-install     # Verify installation works
 
-# Development workflow
-make test              # Run tests
+# Testing
+make test              # Run 32-test suite
+make test-verbose      # Verbose test output
+python3 -m unittest tests.test_trace_compactor.TestParseTraceback -v  # Run specific test class
+
+# Code quality
+make format            # Auto-format with ruff
 make lint              # Check code quality
-make format            # Auto-format code
-make check             # Run linter + tests (pre-commit check)
+make dev-check         # Format + lint + test (run before committing)
+
+# Build & publish
+make clean             # Remove build artifacts
+make build             # Build distribution packages
+make publish-test      # Upload to TestPyPI
+make publish           # Upload to PyPI
 
 # View all commands
 make help
 ```
 
-**Most Common Commands:**
-- `make dev-setup` - Complete development environment setup
-- `make dev-check` - Format, lint, and test (run before committing)
-- `make test-verbose` - Run tests with detailed output
-- `make clean` - Remove all build artifacts
+## Architecture
 
-## Hook Architecture
+### High-Level Design
 
-This project uses a **dual hook strategy** to provide complete traceback compaction coverage:
+The project implements a **hook-based traceback compaction system** that intercepts text at two points:
 
-### 1. UserPromptSubmit Hook
-**Purpose:** Compact tracebacks in messages you paste
+1. **User input** (UserPromptSubmit hook) - Compacts tracebacks you paste
+2. **Tool output** (PostToolUse hook) - Compacts tracebacks from Python scripts Claude runs
 
-**Flow:**
+**Data flow:**
 ```
-User types message with traceback
+Text with traceback
     ↓
-UserPromptSubmit hook fires
+Regex detection (TRACEBACK_BLOCK_RE)
     ↓
-compact-traceback.sh processes prompt
+Parse frames (FRAME_RE, CODE_RE, EXC_LINE_RE)
     ↓
-Traceback compacted
+Score frames (project_root bonus: +100, user code: +10, recency: -index)
     ↓
-Claude receives compacted version
-```
-
-**Example:**
-```
-You: "Fix this error: [500 line traceback]"
-  → Hook compacts to 40 lines
-  → Claude sees: "Fix this error: <COMPACT_PY_TRACEBACK>..."
-```
-
-### 2. PostToolUse Hook
-**Purpose:** Compact tracebacks from Python scripts Claude runs
-
-**Flow:**
-```
-Claude decides to run Python script
+Select top N frames (default: 4)
     ↓
-Bash tool executes script
+Generate compact summary with fingerprint
     ↓
-Script fails with traceback
-    ↓
-PostToolUse hook fires
-    ↓
-compact-traceback.sh processes stdout/stderr
-    ↓
-Traceback compacted
-    ↓
-Claude receives compacted version
+Replace verbose block with <COMPACT_PY_TRACEBACK>
 ```
 
-**Example:**
-```
-Claude runs: python test.py
-  → Script outputs 500 line traceback
-  → Hook compacts to 40 lines
-  → Claude sees compacted version
-  → Saves ~460 lines of context!
-```
+### Key Components
 
-### Why Both Hooks?
+**1. Core Module** (`ctools/trace_compactor.py`)
 
-**Without PostToolUse hook:**
-- Claude runs a Python script that fails
-- Full traceback floods Claude's context
-- Wastes tokens on irrelevant stdlib frames
-- May hit context limits on complex debugging
+Main functions:
+- `parse_traceback_text(text)` - Extract frames and exception from traceback text
+- `compact_traceback_block(parsed, max_frames, project_root)` - Score and select relevant frames
+- `rewrite_prompt_for_claude(prompt, project_root, max_frames)` - Main entry point, replaces all tracebacks
+- `_frame_score(frame, project_root)` - Scoring algorithm for frame relevance
+- `_fingerprint(frames, exception)` - Deterministic hash for deduplication
 
-**With PostToolUse hook:**
-- Tracebacks are compacted before Claude sees them
-- Only relevant frames preserved
-- More context available for actual debugging
-- Claude can iterate faster
+**2. Hook Script** (`.claude/hooks/compact-traceback.sh`)
 
-### Unified Script Design
+Unified script handling both hook types:
+- Detects hook type via `hook_event_name` field
+- Routes to appropriate processing (prompt vs tool output)
+- Calls `claude-trace-compactor` CLI with `--stdin`
+- Returns JSON in correct format for each hook type
 
-The `.claude/hooks/compact-traceback.sh` script handles both hooks:
+**3. CLI** (`claude-trace-compactor` command)
 
-```bash
-# Detects hook type automatically
-HOOK_EVENT=$(echo "$INPUT" | jq -r '.hook_event_name')
+Entry point: `_cli_main()` in `trace_compactor.py`
+- Registered in `pyproject.toml` under `[project.scripts]`
+- Options: `--stdin`, `--file`, `--project-root`, `--max-frames`, `--json`
 
-if [ "$HOOK_EVENT" = "UserPromptSubmit" ]; then
-    # Process prompt text
-    TEXT=$(echo "$INPUT" | jq -r '.prompt')
-    # ...compact and return updatedPrompt
-elif [ "$HOOK_EVENT" = "PostToolUse" ]; then
-    # Process tool output
-    STDOUT=$(echo "$INPUT" | jq -r '.tool_response.stdout')
-    # ...compact and return updatedResponse
-fi
-```
+### Frame Scoring Algorithm
 
-This means:
-- ✅ Single script to maintain
-- ✅ Same compaction logic for both sources
-- ✅ Easy to customize (edit one file)
-- ✅ Consistent behavior
+Critical to understand for modifications:
 
-## Development Guidelines
+```python
+def _frame_score(frame, project_root):
+    score = -frame['raw_index']  # Recency: recent frames score higher
 
-### Code Style
+    if project_root and frame['filename'].startswith(project_root):
+        score += 100  # Project frames highest priority
 
-- **Python Version**: Python 3.8+ (maintain broad compatibility)
-- **Dependencies**: Zero runtime dependencies - keep core modules pure Python
-- **Linting & Formatting**: Use ruff (configured in pyproject.toml)
-- **Code Style**: PEP 8 compliant, enforced by ruff
-- **Line Length**: 100 characters max
-- **Type Hints**: Use where helpful for clarity
+    if not _is_stdlib_or_site_packages(frame['filename']):
+        score += 10   # User code over library code
 
-**Ruff Configuration:**
-The project uses ruff for both linting and formatting:
-- Checks: pycodestyle (E/W), pyflakes (F), isort (I), bugbear (B), and more
-- Auto-formatting: `make format` formats all code
-- Pre-commit check: `make check` runs linter + tests
-
-### Testing Philosophy
-
-Since this is a lightweight utility:
-- Manual testing is acceptable for initial development
-- Focus on real-world traceback examples
-- Test with various Python versions (3.8, 3.9, 3.10, 3.11, 3.12)
-- Verify CLI works on macOS, Linux, and Windows
-
-### Key Files
-
-```
-claude-tools/
-├── .claude/
-│   ├── settings.json                  # Dual hook configuration
-│   └── hooks/
-│       └── compact-traceback.sh       # Unified hook script
-├── ctools/
-│   ├── __init__.py                    # Package exports
-│   └── trace_compactor.py             # Main traceback compactor module
-├── tests/
-│   ├── __init__.py
-│   ├── test_trace_compactor.py        # Core tests
-│   └── test_cli.py                    # CLI tests
-├── Makefile                           # Development automation
-├── pyproject.toml                     # Package metadata and build config
-├── README.md                          # User-facing documentation
-├── CLAUDE.md                          # This file - for Claude Code
-└── .gitignore                         # Python-specific ignores
+    return score
 ```
 
-## Common Development Tasks
+Frames are sorted by score (descending), top N selected, then re-sorted by `raw_index` to preserve chronological order.
 
-### Installing for Development
+### Regex Patterns
 
-Use the Makefile for easy setup:
+**TRACEBACK_BLOCK_RE** - Matches complete traceback blocks:
+- Starts with `Traceback (most recent call last):`
+- Captures one or more frame lines (`File "...", line N, in func`)
+- Optional code line after each frame
+- Ends with exception line (`Error|Exception|Warning...`)
 
-```bash
-# Install with development dependencies (ruff, coverage)
-make install-dev
+**FRAME_RE** - Extracts frame components:
+- Captures: filename, line number, function name
 
-# Or just install the package in editable mode
-make install
+**EXC_LINE_RE** - Extracts exception details:
+- Captures: exception type, message
 
-# Verify installation
-make verify-install
-```
-
-This installs the package in editable mode, so changes take effect immediately.
-
-### Running Tests
-
-Use the Makefile for testing:
-
-```bash
-# Run all tests (32 tests)
-make test
-
-# Run with verbose output
-make test-verbose
-
-# Run with coverage report
-make test-coverage
-```
-
-**Or use unittest directly:**
-
-```bash
-# Run all tests
-python3 -m unittest discover -s tests -p "test_*.py" -v
-
-# Run specific test categories
-python3 -m unittest tests.test_trace_compactor -v  # Core functionality
-python3 -m unittest tests.test_cli -v               # CLI tests
-```
-
-**Test Structure:**
+### Test Structure
 
 ```
 tests/
-├── __init__.py
-├── test_trace_compactor.py    # Core module tests
-│   ├── TestParseTraceback     # Parsing functionality
-│   ├── TestCompactTraceback   # Compaction logic
-│   ├── TestRewritePrompt      # Prompt rewriting
-│   ├── TestFrameScoring       # Frame prioritization
-│   ├── TestEdgeCases          # Error handling
-│   └── TestFingerprinting     # Deduplication
-└── test_cli.py                # CLI tests
-    ├── TestCLI                # Basic CLI operations
-    └── TestCLIIntegration     # Real-world scenarios
+├── test_trace_compactor.py     # Core functionality (6 test classes)
+│   ├── TestParseTraceback      # Parsing logic
+│   ├── TestCompactTraceback    # Compaction logic
+│   ├── TestRewritePrompt       # Full pipeline
+│   ├── TestFrameScoring        # Scoring algorithm
+│   ├── TestEdgeCases           # Malformed input, unicode
+│   └── TestFingerprinting      # Deduplication
+└── test_cli.py                 # CLI tests (2 test classes)
+    ├── TestCLI                 # Basic CLI operations
+    └── TestCLIIntegration      # Real-world scenarios
 ```
 
-### Testing the Trace Compactor
+**32 total tests** - All use stdlib `unittest`, zero test dependencies.
 
+## Development Workflow
+
+### Pre-commit Checklist
+
+**Always run before committing:**
 ```bash
-# Test with example traceback
-cat > test_trace.txt << 'EOF'
-Traceback (most recent call last):
-  File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1130, in _main
-    rv = self.invoke(ctx)
-  File "/home/user/myproject/api/handlers.py", line 45, in handle_request
-    result = process_data(payload)
-  File "/home/user/myproject/api/processor.py", line 123, in process_data
-    return data['items'][0]['value']
-KeyError: 'value'
-EOF
-
-# Run compactor
-python3 -m ctools.trace_compactor --stdin --project-root /home/user/myproject < test_trace.txt
+make dev-check   # Formats, lints, and tests
 ```
 
-### Testing as a Claude Hook
-
-The project includes `.claude/settings.json` with **dual hook configuration**:
-
-**Covers both cases:**
-1. **UserPromptSubmit** - Compacts tracebacks in user messages
-2. **PostToolUse** - Compacts tracebacks from Python scripts Claude runs
-
-The configuration uses the unified script at `.claude/hooks/compact-traceback.sh` that automatically handles both hook types.
-
-**To test:**
-
-```bash
-# The hooks are already configured in .claude/settings.json
-# Just make sure the package is installed
-make install
-
-# Restart Claude Code to load the hooks
-# Then try:
-# 1. Paste a traceback in your message - it will be compacted
-# 2. Ask Claude to run a Python script that errors - output will be compacted
-```
-
-**Manual inline configuration (for reference):**
-
-```bash
-mkdir -p .claude
-cat > .claude/settings.json << 'EOF'
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.prompt' | claude-trace-compactor --stdin --project-root \"$CLAUDE_PROJECT_DIR\" | jq -Rs '{\"updatedPrompt\": .}'",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.tool_response.stdout // \"\"' | claude-trace-compactor --stdin --project-root \"$CLAUDE_PROJECT_DIR\" | jq -Rs '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"updatedResponse\": {\"stdout\": .}}}'",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-```
-
-**Key Benefits of Dual Hooks:**
-- **User prompts**: You paste long tracebacks → automatically compacted
-- **Tool outputs**: Claude runs Python that errors → output compacted before Claude sees it
-- **Complete coverage**: All tracebacks are compacted, regardless of source
-
-### Building for Distribution
-
-Use the Makefile for building and publishing:
-
-```bash
-# Build distribution packages
-make build
-
-# Upload to TestPyPI (for testing)
-make publish-test
-
-# Upload to PyPI (production)
-make publish
-```
-
-**Or manually:**
-
-```bash
-# Install build tools
-pip install build twine
-
-# Build distribution packages
-python3 -m build
-
-# Check distribution
-twine check dist/*
-
-# Upload to PyPI
-twine upload dist/*
-```
-
-## Project Conventions
-
-### Commit Messages
-
-Follow conventional commits:
-- `feat:` - New features
-- `fix:` - Bug fixes
-- `docs:` - Documentation changes
-- `refactor:` - Code refactoring
-- `test:` - Adding or updating tests
-- `chore:` - Maintenance tasks
-
-Examples:
-```
-feat: add --json output option to trace compactor
-fix: handle malformed traceback lines gracefully
-docs: update README with hook configuration examples
-refactor: improve frame scoring algorithm
-```
+This runs:
+1. `ruff format` - Auto-format code
+2. `ruff check` - Lint with auto-fix
+3. `python3 -m unittest` - Run all tests
 
 ### Adding New Tools
 
-When adding a new tool to claude-tools:
+When adding additional tools to `ctools/`:
 
-1. Create new module in `ctools/` directory (e.g., `ctools/log_summarizer.py`)
-2. Export main functions in `ctools/__init__.py`
-3. Add CLI entry point in `pyproject.toml` under `[project.scripts]`
-4. Update README with new tool documentation
-5. Keep zero-dependency philosophy unless absolutely necessary
+1. **Create module** in `ctools/` (e.g., `ctools/log_summarizer.py`)
+2. **Export main functions** in `ctools/__init__.py`
+3. **Add CLI entry point** in `pyproject.toml`:
+   ```toml
+   [project.scripts]
+   claude-log-summarizer = "ctools.log_summarizer:_cli_main"
+   ```
+4. **Follow module template**:
+   ```python
+   """
+   ctools.your_tool
+   ----------------
+   Description...
+   """
+   from __future__ import annotations
+   import argparse
+   from typing import Optional, List
 
-Example structure for new tool:
+   __all__ = ["main_function"]
 
-```python
-"""
-ctools.log_summarizer
----------------------
+   def main_function(text: str) -> str:
+       """Core logic."""
+       pass
 
-Description of what this tool does.
-"""
+   def _cli_main(argv: Optional[List[str]] = None) -> int:
+       """CLI entry point."""
+       parser = argparse.ArgumentParser(prog="claude-your-tool")
+       # ... setup
+       return 0
 
-from __future__ import annotations
-import argparse
-from typing import Optional, List
+   if __name__ == "__main__":
+       import sys
+       raise SystemExit(_cli_main())
+   ```
+5. **Maintain zero dependencies** unless absolutely necessary
+6. **Add tests** in `tests/test_your_tool.py`
+7. **Update README** with usage examples
 
-__all__ = [
-    "summarize_logs",
-]
+### Modifying Frame Scoring
 
-def summarize_logs(text: str, max_lines: int = 10) -> str:
-    """Main function that does the work."""
-    pass
+If changing frame relevance logic:
 
-def _cli_main(argv: Optional[List[str]] = None) -> int:
-    """CLI entry point."""
-    parser = argparse.ArgumentParser(prog="claude-log-summarizer")
-    # ... argument setup
-    return 0
+1. **Edit `_frame_score()`** in `trace_compactor.py`
+2. **Update tests** in `TestFrameScoring` class
+3. **Test with real tracebacks**:
+   ```bash
+   cat your_traceback.txt | claude-trace-compactor --stdin --project-root /path/to/project
+   ```
+4. **Verify hook behavior**:
+   ```bash
+   echo '{"prompt":"Traceback..."}' | .claude/hooks/compact-traceback.sh
+   ```
 
-if __name__ == "__main__":
-    import sys
-    raise SystemExit(_cli_main())
+### Testing Hook Integration
+
+**Manual hook testing:**
+```bash
+# Test UserPromptSubmit hook
+echo '{"prompt":"Traceback (most recent call last):\n  File \"test.py\", line 1\nValueError: test", "hook_event_name": "UserPromptSubmit"}' | \
+  .claude/hooks/compact-traceback.sh
+
+# Test PostToolUse hook
+echo '{"tool_name":"Bash","tool_response":{"stdout":"Traceback (most recent call last):\n  File \"test.py\", line 1\nValueError: test"},"hook_event_name":"PostToolUse"}' | \
+  .claude/hooks/compact-traceback.sh
 ```
 
-## Integration with Claude Code
+**Verify hooks loaded in Claude Code:**
+```bash
+# In Claude Code session, run:
+/hooks
+```
 
-### Recommended Hook Configuration
+### Python Version Compatibility
 
-For developers working on this project, add these hooks to `.claude/settings.local.json`:
+Target: Python 3.8+
+
+Required imports for compatibility:
+```python
+from __future__ import annotations  # Use in all modules
+from typing import Optional, List, Dict, Any  # Explicit types for 3.8
+```
+
+Avoid:
+- `str | None` syntax (use `Optional[str]`)
+- `list[str]` syntax (use `List[str]`)
+- Walrus operator `:=` in critical paths (acceptable in tests)
+
+## Code Style & Standards
+
+**Enforced by ruff** (configured in `pyproject.toml`):
+- Line length: 100 characters
+- Double quotes for strings
+- Space indentation
+- PEP 8 compliant
+- Import sorting (isort)
+
+**Enabled checks:**
+- E/W (pycodestyle errors/warnings)
+- F (pyflakes - unused imports/variables)
+- I (isort - import sorting)
+- UP (pyupgrade - modern Python syntax)
+- B (bugbear - common bugs)
+- C4 (comprehensions)
+- SIM (simplify)
+
+**Type hints:**
+- Use for public API functions
+- Optional for internal helpers
+- Always annotate return types
+
+## Hook Configuration
+
+The `.claude/settings.json` configures both hooks to use the unified script:
 
 ```json
 {
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -r '.tool_input.file_path' | { read file_path; if echo \"$file_path\" | grep -q '\\.py$'; then python3 -m py_compile \"$file_path\" 2>&1; if [ $? -ne 0 ]; then exit 2; fi; fi; }",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/compact-traceback.sh",
+        "timeout": 10
+      }]
+    }],
+    "PostToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/compact-traceback.sh",
+        "timeout": 10
+      }]
+    }]
   }
 }
 ```
 
-This validates Python syntax after file edits.
+**Environment variables available in hooks:**
+- `$CLAUDE_PROJECT_DIR` - Absolute path to project root
+- `$CLAUDE_ENV_FILE` - File for persisting environment variables
+- `$CLAUDE_CODE_REMOTE` - "true" if remote, empty if local
 
-### Testing Changes
+## Important Implementation Details
 
-**The Golden Rule:** Always run `make dev-check` before committing!
+### Why No Dependencies?
 
-```bash
-# Complete pre-commit check (format, lint, test)
-make dev-check
+Hooks must execute quickly (10s timeout) and work in any environment. External dependencies:
+- Increase installation complexity
+- May not be available in user's environment
+- Slow down hook execution
+- Create version conflicts
 
-# Or run steps individually:
-make format      # Auto-format code
-make lint        # Check code quality
-make test        # Run all tests
+### Fingerprinting Algorithm
+
+```python
+def _fingerprint(frames, exception_lines):
+    h = hashlib.sha1()
+    for f in frames:
+        h.update(f"{f['filename']}:{f['lineno']}:{f['name']}".encode())
+    for exc in exception_lines:
+        h.update(exc.encode())
+    return h.hexdigest()[:10]
 ```
 
-**Manual checks (if needed):**
+Used for:
+- Deduplication of identical errors
+- Recognizing recurring issues
+- Deterministic (same traceback = same fingerprint)
 
-```bash
-# Syntax check all Python files
-find ctools -name "*.py" -exec python3 -m py_compile {} \;
+### Compaction Format
 
-# Test CLI works
-python3 -m ctools.trace_compactor --help
+Output template:
+```
+<COMPACT_PY_TRACEBACK fingerprint={10_char_hash}>
+Exception: {exception_type}: {message}
 
-# Test import works
-python3 -c "from ctools import rewrite_prompt_for_claude; print('OK')"
-
-# Manual test with real traceback
-cat test_trace.txt | python3 -m ctools.trace_compactor --stdin
+Relevant frames:
+- {basename}:{lineno} in {func} → {code_line}
+- {basename}:{lineno} in {func} → {code_line}
+...
+</COMPACT_PY_TRACEBACK>
 ```
 
-**When Adding New Features:**
-1. Write tests first (TDD approach recommended)
-2. Add test cases to appropriate test file in `tests/`
-3. Run `make test` to verify tests fail initially
-4. Implement the feature
-5. Run `make dev-check` to format, lint, and test
-6. Ensure all 32+ existing tests still pass
+**Token savings:** Typically reduces 200-500 tokens to 30-50 tokens.
 
-**Quick Development Workflow:**
+## Common Pitfalls
+
+1. **Forgetting to run `make dev-check`** - Always run before committing
+2. **Breaking Python 3.8 compatibility** - Test with older Python versions
+3. **Adding dependencies** - Avoid unless absolutely necessary
+4. **Modifying hook JSON output format** - Must match Claude Code's expected schema
+5. **Ignoring hook timeouts** - Keep execution fast (<2s typical, 10s max)
+6. **Not testing with real tracebacks** - Unit tests don't catch all edge cases
+
+## Debugging
+
+### Hook Not Running
+
+1. Check hook configuration: Run `/hooks` in Claude Code
+2. Verify syntax: `jq . .claude/settings.json`
+3. Test CLI: `claude-trace-compactor --help`
+4. Test script manually: `echo '{"prompt":"test"}' | .claude/hooks/compact-traceback.sh`
+5. Check timeout: Increase in settings if needed
+
+### Unexpected Compaction Results
+
+1. Test CLI directly: `cat traceback.txt | claude-trace-compactor --stdin --project-root .`
+2. Enable JSON output: `--json` flag shows structured data
+3. Check frame scoring: Add debug prints in `_frame_score()`
+4. Verify regex matching: Test TRACEBACK_BLOCK_RE with your input
+
+### Test Failures
+
 ```bash
-# 1. Make changes to code
-# 2. Run this before committing:
-make dev-check
+# Run specific failing test
+python3 -m unittest tests.test_trace_compactor.TestParseTraceback.test_specific_case -v
 
-# If all passes, you're ready to commit!
+# Run with debug output (add print statements to code)
+python3 -m unittest tests.test_cli -v
 ```
 
-## Architecture Notes
+## Project-Specific Conventions
 
-### Why Zero Dependencies?
+### Commit Messages
 
-The trace compactor is designed to run as a Claude Code hook, which means:
-- Must execute quickly (hooks have timeouts)
-- Should work in any Python environment
-- Can't rely on external packages being installed
-- Needs to be extremely reliable
+Use conventional commits:
+- `feat:` - New features
+- `fix:` - Bug fixes
+- `docs:` - Documentation only
+- `refactor:` - Code refactoring
+- `test:` - Test changes
+- `chore:` - Maintenance
 
-### Frame Scoring Algorithm
+Examples from git history:
+```
+feat: add dual hook support for complete traceback compaction
+test: add comprehensive test suite with 32 tests
+docs: add transparency and verification section
+```
 
-The compactor uses a scoring system to identify the most relevant frames:
+### File Organization
 
-1. **Project frames** (+100): Files within `--project-root` get highest priority
-2. **User code** (+10): Non-stdlib/site-packages files are prioritized
-3. **Recency** (-index): More recent frames (closer to error) score higher
-4. **Deduplication**: Same frame appearing multiple times only counted once
+```
+ctools/                     # Package code (pure Python, no dependencies)
+  ├── __init__.py          # Public API exports
+  └── trace_compactor.py   # Main module (~400 lines)
 
-This ensures users see frames from their code, not deep in library internals.
+tests/                      # Test suite (uses stdlib unittest)
+  ├── __init__.py
+  ├── test_trace_compactor.py  # Core tests (~500 lines)
+  └── test_cli.py              # CLI tests (~200 lines)
 
-### Fingerprinting
+.claude/                    # Claude Code configuration
+  ├── settings.json        # Hook configuration (checked in)
+  └── hooks/
+      └── compact-traceback.sh  # Unified hook script
 
-Each compacted traceback gets a deterministic fingerprint (first 10 chars of SHA1):
-- Allows deduplication of identical errors
-- Helps Claude recognize recurring issues
-- Based on file paths, line numbers, and function names
+Makefile                    # All development commands
+pyproject.toml             # Package metadata, build config, ruff config
+README.md                  # User documentation
+```
 
-## Future Tools (Roadmap)
+### When to Add Tests
 
-Ideas for future additions to claude-tools:
+**Always add tests when:**
+- Adding new public API functions
+- Modifying frame scoring algorithm
+- Changing regex patterns
+- Adding CLI options
+- Fixing bugs (add regression test)
 
-### Log Summarizer
-- Detect repeated log lines and show counts
-- Group related log messages
-- Highlight errors and warnings
-- Compact timestamps
-
-### Diff Compressor
-- Reduce large git diffs to essential changes
-- Skip generated files (package-lock.json, etc.)
-- Highlight additions/deletions
-- Context-aware trimming
-
-### Test Output Formatter
-- Compact pytest/unittest output
-- Show only failed tests
-- Clean up assertion diffs
-- Preserve stack traces (with compactor)
-
-### Context Injector
-- SessionStart hook to add project context
-- Include recent git commits
-- Show open issues/PRs
-- Add project-specific guidelines
-
-### Memory System
-- Persistent memory across Claude sessions
-- Remember project decisions
-- Track common issues and solutions
-- Learn user preferences
-
-## Tips for Working with Claude
-
-When asking Claude to work on this project:
-
-- **Be specific about changes**: "Update the regex in trace_compactor.py to also match AssertionError"
-- **Reference existing code**: "Following the pattern in _frame_score(), add a similar function for..."
-- **Test thoroughly**: "Run the test cases and verify the output matches expected format"
-- **Maintain style**: "Keep the same docstring style and type hints"
-- **Think about hooks**: "Ensure this change doesn't slow down hook execution"
-
-## Known Issues
-
-None currently. Report issues at: https://github.com/tarekziade/claude-tools/issues
+**Test naming convention:**
+- `test_<function_name>_<scenario>` for unit tests
+- `test_<feature>_integration` for integration tests
 
 ## Resources
 
-- [Claude Code Documentation](https://code.claude.com/docs)
-- [Hooks Guide](https://code.claude.com/docs/en/hooks-guide)
-- [Python Traceback Module](https://docs.python.org/3/library/traceback.html)
-- [Ripgrep (rg) for testing](https://github.com/BurntSushi/ripgrep)
-
-## Makefile Commands Reference
-
-The project provides a comprehensive Makefile for all development tasks. Run `make help` to see all available commands.
-
-### Installation Commands
-
-| Command | Description |
-|---------|-------------|
-| `make install` | Install package in editable mode |
-| `make install-dev` | Install with dev dependencies (ruff, coverage) |
-| `make verify-install` | Verify installation works correctly |
-| `make dev-setup` | Complete development environment setup |
-
-### Development Commands
-
-| Command | Description |
-|---------|-------------|
-| `make test` | Run test suite |
-| `make test-verbose` | Run tests with verbose output |
-| `make test-coverage` | Run tests with coverage report |
-| `make lint` | Run ruff linter |
-| `make format` | Format code with ruff |
-| `make check` | Run linter + tests (CI check) |
-| `make dev-check` | Format + lint + test (pre-commit) |
-| `make dev-format-check` | Check if code is formatted |
-
-### Build Commands
-
-| Command | Description |
-|---------|-------------|
-| `make clean` | Remove build artifacts and cache |
-| `make build` | Build distribution packages |
-
-### Publishing Commands
-
-| Command | Description |
-|---------|-------------|
-| `make publish-test` | Upload to TestPyPI |
-| `make publish` | Upload to PyPI (production) |
-
-### Example Commands
-
-| Command | Description |
-|---------|-------------|
-| `make run-example` | Run example traceback compaction |
-
-### Common Workflows
-
-**First time setup:**
-```bash
-make dev-setup
-# Installs dev dependencies and verifies installation
-```
-
-**Daily development:**
-```bash
-# Edit code...
-make dev-check
-# Formats, lints, and tests before commit
-```
-
-**Before committing:**
-```bash
-make dev-check
-# Ensures code is formatted, linted, and tested
-```
-
-**Building for release:**
-```bash
-make clean
-make build
-make publish-test  # Test on TestPyPI first
-make publish       # When ready for production
-```
-
-## Ruff Configuration
-
-The project uses ruff for linting and formatting. Configuration is in `pyproject.toml`:
-
-### Enabled Checks
-
-- **E/W** - pycodestyle errors and warnings
-- **F** - pyflakes (unused imports, variables, etc.)
-- **I** - isort (import sorting)
-- **UP** - pyupgrade (modernize Python syntax)
-- **B** - flake8-bugbear (common bugs)
-- **C4** - flake8-comprehensions (list/dict comprehensions)
-- **SIM** - flake8-simplify (simplify code)
-
-### Configuration Details
-
-```toml
-# From pyproject.toml
-[tool.ruff]
-target-version = "py38"
-line-length = 100
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]
-ignore = ["E501"]  # Line too long (handled by formatter)
-fixable = ["ALL"]  # Auto-fix everything possible
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-```
-
-### Using Ruff
-
-```bash
-# Check code
-make lint
-# or: ruff check ctools tests
-
-# Format code
-make format
-# or: ruff format ctools tests
-
-# Check + auto-fix
-ruff check --fix ctools tests
-```
-
-## License
-
-MIT License - This project is open source and welcomes contributions.
+- Repository: https://github.com/tarekziade/claude-tools
+- Claude Code Docs: https://code.claude.com/docs
+- Hooks Guide: https://code.claude.com/docs/en/hooks-guide
