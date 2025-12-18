@@ -381,17 +381,33 @@ Contributions are welcome! Here's how you can help:
 
 ### Development Setup
 
+The project uses a Makefile to streamline all development tasks:
+
 ```bash
 git clone https://github.com/tarekziade/claude-tools.git
 cd claude-tools
-pip install -e .
 
-# Run tests
-python -m ctools.trace_compactor --stdin --project-root . < test_trace.txt
+# Complete development setup
+make dev-setup
 
-# Test as module
-python -c "from ctools import rewrite_prompt_for_claude; print('Import successful')"
+# Or install step by step
+make install-dev      # Install with dev dependencies (ruff, coverage)
+make verify-install   # Verify everything works
+make test            # Run test suite
+
+# Before committing
+make dev-check       # Format, lint, and test
 ```
+
+**Available commands:**
+- `make help` - Show all available commands
+- `make test` - Run test suite (32 tests)
+- `make lint` - Check code quality with ruff
+- `make format` - Auto-format code with ruff
+- `make clean` - Remove build artifacts
+- `make build` - Build distribution packages
+
+**See [CLAUDE.md](CLAUDE.md) for complete development guide.**
 
 ## Resources
 

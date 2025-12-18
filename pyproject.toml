@@ -30,9 +30,69 @@ Homepage = "https://github.com/tarekziade/claude-tools"
 Repository = "https://github.com/tarekziade/claude-tools"
 Issues = "https://github.com/tarekziade/claude-tools/issues"
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "coverage>=7.0",
+]
+
 [project.scripts]
 claude-trace-compactor = "ctools.trace_compactor:_cli_main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ctools*"]
+
+[tool.ruff]
+# Target Python 3.8+
+target-version = "py38"
+line-length = 100
+
+# Exclude common directories
+exclude = [
+    ".git",
+    ".ruff_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+# Enable pycodestyle (E), pyflakes (F), and isort (I)
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+
+# Ignore specific rules
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+# Allow fix for all enabled rules (when `--fix` is provided)
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"
+
+# Respect magic trailing comma
+skip-magic-trailing-comma = false
+
+# Auto-detect line endings
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ctools"]

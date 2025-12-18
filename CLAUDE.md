@@ -6,14 +6,47 @@ This file contains instructions and configuration for working on the claude-tool
 
 **claude-tools** is a Python package that provides hooks and utilities for Claude Code. The primary tool is a traceback compactor that intelligently reduces Python stack traces to save tokens while preserving essential debugging information.
 
+## Quick Start with Makefile
+
+The project is fully driven by a Makefile. All common tasks can be executed using `make` commands:
+
+```bash
+# First time setup
+make install-dev        # Install with development dependencies
+make verify-install     # Verify everything works
+
+# Development workflow
+make test              # Run tests
+make lint              # Check code quality
+make format            # Auto-format code
+make check             # Run linter + tests (pre-commit check)
+
+# View all commands
+make help
+```
+
+**Most Common Commands:**
+- `make dev-setup` - Complete development environment setup
+- `make dev-check` - Format, lint, and test (run before committing)
+- `make test-verbose` - Run tests with detailed output
+- `make clean` - Remove all build artifacts
+
 ## Development Guidelines
 
 ### Code Style
 
 - **Python Version**: Python 3.8+ (maintain broad compatibility)
-- **Dependencies**: Zero dependencies - keep the core modules pure Python
-- **Code Style**: PEP 8 compliant, use type hints where helpful
-- **Line Length**: 100 characters max (reasonable for modern displays)
+- **Dependencies**: Zero runtime dependencies - keep core modules pure Python
+- **Linting & Formatting**: Use ruff (configured in pyproject.toml)
+- **Code Style**: PEP 8 compliant, enforced by ruff
+- **Line Length**: 100 characters max
+- **Type Hints**: Use where helpful for clarity
+
+**Ruff Configuration:**
+The project uses ruff for both linting and formatting:
+- Checks: pycodestyle (E/W), pyflakes (F), isort (I), bugbear (B), and more
+- Auto-formatting: `make format` formats all code
+- Pre-commit check: `make check` runs linter + tests
 
 ### Testing Philosophy
 
@@ -40,26 +73,45 @@ claude-tools/
 
 ### Installing for Development
 
+Use the Makefile for easy setup:
+
 ```bash
-pip install -e .
+# Install with development dependencies (ruff, coverage)
+make install-dev
+
+# Or just install the package in editable mode
+make install
+
+# Verify installation
+make verify-install
 ```
 
 This installs the package in editable mode, so changes take effect immediately.
 
 ### Running Tests
 
-The project uses Python's built-in unittest framework (zero dependencies):
+Use the Makefile for testing:
 
 ```bash
 # Run all tests (32 tests)
+make test
+
+# Run with verbose output
+make test-verbose
+
+# Run with coverage report
+make test-coverage
+```
+
+**Or use unittest directly:**
+
+```bash
+# Run all tests
 python3 -m unittest discover -s tests -p "test_*.py" -v
 
 # Run specific test categories
 python3 -m unittest tests.test_trace_compactor -v  # Core functionality
 python3 -m unittest tests.test_cli -v               # CLI tests
-
-# Quick test run (no verbose)
-python3 -m unittest discover -s tests -p "test_*.py"
 ```
 
 **Test Structure:**
@@ -125,17 +177,32 @@ EOF
 
 ### Building for Distribution
 
+Use the Makefile for building and publishing:
+
+```bash
+# Build distribution packages
+make build
+
+# Upload to TestPyPI (for testing)
+make publish-test
+
+# Upload to PyPI (production)
+make publish
+```
+
+**Or manually:**
+
 ```bash
 # Install build tools
 pip install build twine
 
 # Build distribution packages
-python -m build
+python3 -m build
 
 # Check distribution
 twine check dist/*
 
-# Upload to PyPI (when ready)
+# Upload to PyPI
 twine upload dist/*
 ```
 
@@ -231,12 +298,21 @@ This validates Python syntax after file edits.
 
 ### Testing Changes
 
-Before committing, always run the test suite:
+**The Golden Rule:** Always run `make dev-check` before committing!
 
 ```bash
-# Run all tests (REQUIRED before committing)
-python3 -m unittest discover -s tests -p "test_*.py" -v
+# Complete pre-commit check (format, lint, test)
+make dev-check
 
+# Or run steps individually:
+make format      # Auto-format code
+make lint        # Check code quality
+make test        # Run all tests
+```
+
+**Manual checks (if needed):**
+
+```bash
 # Syntax check all Python files
 find ctools -name "*.py" -exec python3 -m py_compile {} \;
 
@@ -253,10 +329,19 @@ cat test_trace.txt | python3 -m ctools.trace_compactor --stdin
 **When Adding New Features:**
 1. Write tests first (TDD approach recommended)
 2. Add test cases to appropriate test file in `tests/`
-3. Run tests to verify they fail initially
+3. Run `make test` to verify tests fail initially
 4. Implement the feature
-5. Run tests again to verify they pass
+5. Run `make dev-check` to format, lint, and test
 6. Ensure all 32+ existing tests still pass
+
+**Quick Development Workflow:**
+```bash
+# 1. Make changes to code
+# 2. Run this before committing:
+make dev-check
+
+# If all passes, you're ready to commit!
+```
 
 ## Architecture Notes
 
@@ -340,6 +425,128 @@ None currently. Report issues at: https://github.com/tarekziade/claude-tools/iss
 - [Hooks Guide](https://code.claude.com/docs/en/hooks-guide)
 - [Python Traceback Module](https://docs.python.org/3/library/traceback.html)
 - [Ripgrep (rg) for testing](https://github.com/BurntSushi/ripgrep)
+
+## Makefile Commands Reference
+
+The project provides a comprehensive Makefile for all development tasks. Run `make help` to see all available commands.
+
+### Installation Commands
+
+| Command | Description |
+|---------|-------------|
+| `make install` | Install package in editable mode |
+| `make install-dev` | Install with dev dependencies (ruff, coverage) |
+| `make verify-install` | Verify installation works correctly |
+| `make dev-setup` | Complete development environment setup |
+
+### Development Commands
+
+| Command | Description |
+|---------|-------------|
+| `make test` | Run test suite |
+| `make test-verbose` | Run tests with verbose output |
+| `make test-coverage` | Run tests with coverage report |
+| `make lint` | Run ruff linter |
+| `make format` | Format code with ruff |
+| `make check` | Run linter + tests (CI check) |
+| `make dev-check` | Format + lint + test (pre-commit) |
+| `make dev-format-check` | Check if code is formatted |
+
+### Build Commands
+
+| Command | Description |
+|---------|-------------|
+| `make clean` | Remove build artifacts and cache |
+| `make build` | Build distribution packages |
+
+### Publishing Commands
+
+| Command | Description |
+|---------|-------------|
+| `make publish-test` | Upload to TestPyPI |
+| `make publish` | Upload to PyPI (production) |
+
+### Example Commands
+
+| Command | Description |
+|---------|-------------|
+| `make run-example` | Run example traceback compaction |
+
+### Common Workflows
+
+**First time setup:**
+```bash
+make dev-setup
+# Installs dev dependencies and verifies installation
+```
+
+**Daily development:**
+```bash
+# Edit code...
+make dev-check
+# Formats, lints, and tests before commit
+```
+
+**Before committing:**
+```bash
+make dev-check
+# Ensures code is formatted, linted, and tested
+```
+
+**Building for release:**
+```bash
+make clean
+make build
+make publish-test  # Test on TestPyPI first
+make publish       # When ready for production
+```
+
+## Ruff Configuration
+
+The project uses ruff for linting and formatting. Configuration is in `pyproject.toml`:
+
+### Enabled Checks
+
+- **E/W** - pycodestyle errors and warnings
+- **F** - pyflakes (unused imports, variables, etc.)
+- **I** - isort (import sorting)
+- **UP** - pyupgrade (modernize Python syntax)
+- **B** - flake8-bugbear (common bugs)
+- **C4** - flake8-comprehensions (list/dict comprehensions)
+- **SIM** - flake8-simplify (simplify code)
+
+### Configuration Details
+
+```toml
+# From pyproject.toml
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]  # Line too long (handled by formatter)
+fixable = ["ALL"]  # Auto-fix everything possible
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+```
+
+### Using Ruff
+
+```bash
+# Check code
+make lint
+# or: ruff check ctools tests
+
+# Format code
+make format
+# or: ruff format ctools tests
+
+# Check + auto-fix
+ruff check --fix ctools tests
+```
 
 ## License
 
