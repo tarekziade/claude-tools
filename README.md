@@ -400,6 +400,110 @@ echo '{"prompt":"Traceback (most recent call last):\n  File \"test.py\", line 1\
   jq -Rs '{"updatedPrompt": .}'
 ```
 
+## Transparency & Verification
+
+### ⚠️ Important: Hooks Modify Silently
+
+**There is NO visual indicator when hooks modify your prompts.** This is a Claude Code design decision.
+
+When you submit a message with a traceback:
+- You see your original message in the input box
+- The hook compacts it in the background
+- Claude sees the compacted version
+- You never see what Claude received
+
+**Example:**
+```
+What you type:
+"Fix this: [500 line traceback]"
+
+What Claude sees:
+"Fix this: <COMPACT_PY_TRACEBACK>
+Exception: KeyError: 'key'
+Relevant frames:
+- handler.py:45 in handle_request
+</COMPACT_PY_TRACEBACK>"
+```
+
+### How to Verify Hooks Are Working
+
+**1. Use debug mode:**
+```bash
+claude code --debug
+```
+
+**2. Check registered hooks:**
+```bash
+/hooks
+```
+Run this command in Claude Code to see all active hooks.
+
+**3. Enable logging (optional):**
+
+Set an environment variable to log hook activity:
+```bash
+# Add to your ~/.zshrc or ~/.bashrc
+export CLAUDE_HOOK_LOG=~/.claude/hook-activity.log
+
+# Or set per-session
+CLAUDE_HOOK_LOG=~/hook.log claude code
+```
+
+Then use the logged version:
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/compact-traceback-logged.sh"
+      }]
+    }]
+  }
+}
+```
+
+**View the log:**
+```bash
+tail -f ~/.claude/hook-activity.log
+```
+
+**Example log output:**
+```
+[2025-01-15 14:23:10] Hook triggered: UserPromptSubmit
+[2025-01-15 14:23:10] Traceback detected in user prompt - compacting...
+[2025-01-15 14:23:10] Compacted: 127 lines → 15 lines (saved 112 lines)
+[2025-01-15 14:25:33] Hook triggered: PostToolUse
+[2025-01-15 14:25:33] Traceback detected in tool output - compacting...
+[2025-01-15 14:25:33] Compacted tool output: 89 lines → 12 lines (saved 77 lines)
+```
+
+**4. Test manually:**
+```bash
+# Test the hook directly
+echo '{"prompt":"Traceback (most recent call last):\n  File \"test.py\", line 1\nValueError: test"}' | \
+  .claude/hooks/compact-traceback.sh
+
+# Should output compacted JSON
+```
+
+### Security Implications
+
+Since hooks modify your input silently:
+- ✅ **Review hook scripts** before using them
+- ✅ **Use logging** to verify what hooks do
+- ✅ **Test hooks** manually first
+- ✅ **Check `/hooks`** to see what's active
+- ⚠️ **Never run untrusted** hook scripts
+
+The traceback compactor only:
+- Detects Python traceback patterns
+- Compacts them to essential frames
+- Preserves all error information
+- Doesn't modify other content
+
+You can review the source code in `.claude/hooks/compact-traceback.sh` or at https://github.com/tarekziade/claude-tools
+
 ## Troubleshooting
 
 ### Hook not running
