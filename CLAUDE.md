@@ -46,6 +46,39 @@ pip install -e .
 
 This installs the package in editable mode, so changes take effect immediately.
 
+### Running Tests
+
+The project uses Python's built-in unittest framework (zero dependencies):
+
+```bash
+# Run all tests (32 tests)
+python3 -m unittest discover -s tests -p "test_*.py" -v
+
+# Run specific test categories
+python3 -m unittest tests.test_trace_compactor -v  # Core functionality
+python3 -m unittest tests.test_cli -v               # CLI tests
+
+# Quick test run (no verbose)
+python3 -m unittest discover -s tests -p "test_*.py"
+```
+
+**Test Structure:**
+
+```
+tests/
+├── __init__.py
+├── test_trace_compactor.py    # Core module tests
+│   ├── TestParseTraceback     # Parsing functionality
+│   ├── TestCompactTraceback   # Compaction logic
+│   ├── TestRewritePrompt      # Prompt rewriting
+│   ├── TestFrameScoring       # Frame prioritization
+│   ├── TestEdgeCases          # Error handling
+│   └── TestFingerprinting     # Deduplication
+└── test_cli.py                # CLI tests
+    ├── TestCLI                # Basic CLI operations
+    └── TestCLIIntegration     # Real-world scenarios
+```
+
 ### Testing the Trace Compactor
 
 ```bash
@@ -62,7 +95,7 @@ KeyError: 'value'
 EOF
 
 # Run compactor
-python -m ctools.trace_compactor --stdin --project-root /home/user/myproject < test_trace.txt
+python3 -m ctools.trace_compactor --stdin --project-root /home/user/myproject < test_trace.txt
 ```
 
 ### Testing as a Claude Hook
@@ -198,21 +231,32 @@ This validates Python syntax after file edits.
 
 ### Testing Changes
 
-Before committing:
+Before committing, always run the test suite:
 
 ```bash
+# Run all tests (REQUIRED before committing)
+python3 -m unittest discover -s tests -p "test_*.py" -v
+
 # Syntax check all Python files
 find ctools -name "*.py" -exec python3 -m py_compile {} \;
 
 # Test CLI works
-python -m ctools.trace_compactor --help
+python3 -m ctools.trace_compactor --help
 
 # Test import works
-python -c "from ctools import rewrite_prompt_for_claude; print('OK')"
+python3 -c "from ctools import rewrite_prompt_for_claude; print('OK')"
 
-# Test with real traceback
-cat test_trace.txt | python -m ctools.trace_compactor --stdin
+# Manual test with real traceback
+cat test_trace.txt | python3 -m ctools.trace_compactor --stdin
 ```
+
+**When Adding New Features:**
+1. Write tests first (TDD approach recommended)
+2. Add test cases to appropriate test file in `tests/`
+3. Run tests to verify they fail initially
+4. Implement the feature
+5. Run tests again to verify they pass
+6. Ensure all 32+ existing tests still pass
 
 ## Architecture Notes
 

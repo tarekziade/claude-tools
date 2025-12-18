@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import os
+import sys
 import json
 import hashlib
 import argparse
@@ -51,7 +52,7 @@ TRACEBACK_BLOCK_RE = re.compile(
     r"(?:[ \t]+File\s+\".*?\",\s+line\s+\d+,\s+in\s+.*(?:\r?\n)"
     r"(?:[ \t]+.*(?:\r?\n))?"  # optional code line after each frame
     r")+"
-    r"[^"]+?(?:Error|Exception|Warning|RuntimeError|AssertionError|TypeError|ValueError)[:]?.*?"
+    r'[^"]+?(?:Error|Exception|Warning|RuntimeError|AssertionError|TypeError|ValueError)[:]?.*?'
     r")",
     re.VERBOSE | re.MULTILINE,
 )
@@ -170,8 +171,8 @@ def _frame_score(f: Dict[str, Any], project_root: Optional[str] = None) -> int:
     if not _is_stdlib_path(fname):
         score += 10
 
-    # favor later frames (closer to error)
-    score += -int(f.get("raw_index", 0))
+    # favor later frames (closer to error) - higher raw_index = more recent in traceback
+    score += int(f.get("raw_index", 0))
     return score
 
 
@@ -294,6 +295,4 @@ def _cli_main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    import sys
-
     raise SystemExit(_cli_main())

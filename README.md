@@ -271,6 +271,33 @@ The trace compactor uses a sophisticated scoring algorithm to identify the most 
 
 ## Testing
 
+### Run the test suite
+
+The project includes comprehensive tests using Python's built-in unittest framework (zero test dependencies):
+
+```bash
+# Run all tests
+python3 -m unittest discover -s tests -p "test_*.py" -v
+
+# Run specific test file
+python3 -m unittest tests.test_trace_compactor -v
+
+# Run specific test class
+python3 -m unittest tests.test_trace_compactor.TestParseTraceback -v
+
+# Run specific test method
+python3 -m unittest tests.test_trace_compactor.TestParseTraceback.test_parse_simple_traceback -v
+```
+
+**Test Coverage:**
+- ✅ 32 tests covering all major functionality
+- ✅ Traceback parsing and compaction
+- ✅ CLI functionality (stdin, file input, JSON output)
+- ✅ Frame scoring algorithm
+- ✅ Edge cases (malformed input, unicode, special characters)
+- ✅ Integration tests (Django, pytest, async tracebacks)
+- ✅ Fingerprinting and deduplication
+
 ### Test the compactor directly
 
 ```bash
