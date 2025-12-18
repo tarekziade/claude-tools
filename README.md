@@ -83,7 +83,9 @@ pip install -e .
 
 ### As a Claude Code Hook (Recommended)
 
-The most powerful way to use the trace compactor is as a Claude Code hook that automatically processes all prompts before they reach Claude.
+The most powerful way to use the trace compactor is as a Claude Code hook that automatically processes tracebacks in **two places**:
+1. **User prompts** - When you paste tracebacks
+2. **Tool outputs** - When Claude runs Python scripts that fail
 
 **1. Install claude-tools:**
 
@@ -91,7 +93,7 @@ The most powerful way to use the trace compactor is as a Claude Code hook that a
 pip install git+https://github.com/tarekziade/claude-tools.git
 ```
 
-**2. Configure the hook in your Claude settings:**
+**2. Configure BOTH hooks in your Claude settings:**
 
 Add to `~/.claude/settings.json` (global) or `.claude/settings.json` (project-specific):
 
@@ -108,6 +110,18 @@ Add to `~/.claude/settings.json` (global) or `.claude/settings.json` (project-sp
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.stdout // \"\"' | claude-trace-compactor --stdin --project-root \"$CLAUDE_PROJECT_DIR\" | jq -Rs '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"updatedResponse\": {\"stdout\": .}}}'",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
@@ -115,11 +129,64 @@ Add to `~/.claude/settings.json` (global) or `.claude/settings.json` (project-sp
 
 **3. Start using Claude Code normally!**
 
-Any Python tracebacks in your prompts will be automatically compacted before being sent to Claude.
+- **User prompts**: Tracebacks you paste will be compacted
+- **Tool outputs**: Tracebacks from Claude's Python scripts will be compacted
+
+This provides complete traceback compaction coverage!
 
 #### Advanced Hook Configuration
 
-**Project-specific hook with custom frame limit:**
+**Unified hook script (handles both user prompts and tool outputs):**
+
+This project includes a unified script at `.claude/hooks/compact-traceback.sh` that handles both hooks automatically.
+
+`.claude/settings.json`:
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/compact-traceback.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/compact-traceback.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The script automatically detects which hook type triggered it and processes the appropriate data.
+
+**Custom frame limit:**
+
+Modify the script to pass `--max-frames` option:
+```bash
+# In .claude/hooks/compact-traceback.sh, change:
+claude-trace-compactor --stdin --project-root "${CLAUDE_PROJECT_DIR:-.}"
+
+# To:
+claude-trace-compactor --stdin --project-root "${CLAUDE_PROJECT_DIR:-.}" --max-frames 6
+```
+
+**Simple inline version for user prompts only:**
+
+If you only want to compact tracebacks in user prompts (not tool outputs):
 
 `.claude/settings.json`:
 ```json
@@ -140,7 +207,7 @@ Any Python tracebacks in your prompts will be automatically compacted before bei
 }
 ```
 
-**Custom hook script for more control:**
+**Legacy simple hook script:**
 
 `.claude/hooks/compact-trace.sh`:
 ```bash

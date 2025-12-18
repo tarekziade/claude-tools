@@ -31,6 +31,101 @@ make help
 - `make test-verbose` - Run tests with detailed output
 - `make clean` - Remove all build artifacts
 
+## Hook Architecture
+
+This project uses a **dual hook strategy** to provide complete traceback compaction coverage:
+
+### 1. UserPromptSubmit Hook
+**Purpose:** Compact tracebacks in messages you paste
+
+**Flow:**
+```
+User types message with traceback
+    ↓
+UserPromptSubmit hook fires
+    ↓
+compact-traceback.sh processes prompt
+    ↓
+Traceback compacted
+    ↓
+Claude receives compacted version
+```
+
+**Example:**
+```
+You: "Fix this error: [500 line traceback]"
+  → Hook compacts to 40 lines
+  → Claude sees: "Fix this error: <COMPACT_PY_TRACEBACK>..."
+```
+
+### 2. PostToolUse Hook
+**Purpose:** Compact tracebacks from Python scripts Claude runs
+
+**Flow:**
+```
+Claude decides to run Python script
+    ↓
+Bash tool executes script
+    ↓
+Script fails with traceback
+    ↓
+PostToolUse hook fires
+    ↓
+compact-traceback.sh processes stdout/stderr
+    ↓
+Traceback compacted
+    ↓
+Claude receives compacted version
+```
+
+**Example:**
+```
+Claude runs: python test.py
+  → Script outputs 500 line traceback
+  → Hook compacts to 40 lines
+  → Claude sees compacted version
+  → Saves ~460 lines of context!
+```
+
+### Why Both Hooks?
+
+**Without PostToolUse hook:**
+- Claude runs a Python script that fails
+- Full traceback floods Claude's context
+- Wastes tokens on irrelevant stdlib frames
+- May hit context limits on complex debugging
+
+**With PostToolUse hook:**
+- Tracebacks are compacted before Claude sees them
+- Only relevant frames preserved
+- More context available for actual debugging
+- Claude can iterate faster
+
+### Unified Script Design
+
+The `.claude/hooks/compact-traceback.sh` script handles both hooks:
+
+```bash
+# Detects hook type automatically
+HOOK_EVENT=$(echo "$INPUT" | jq -r '.hook_event_name')
+
+if [ "$HOOK_EVENT" = "UserPromptSubmit" ]; then
+    # Process prompt text
+    TEXT=$(echo "$INPUT" | jq -r '.prompt')
+    # ...compact and return updatedPrompt
+elif [ "$HOOK_EVENT" = "PostToolUse" ]; then
+    # Process tool output
+    STDOUT=$(echo "$INPUT" | jq -r '.tool_response.stdout')
+    # ...compact and return updatedResponse
+fi
+```
+
+This means:
+- ✅ Single script to maintain
+- ✅ Same compaction logic for both sources
+- ✅ Easy to customize (edit one file)
+- ✅ Consistent behavior
+
 ## Development Guidelines
 
 ### Code Style
@@ -60,13 +155,22 @@ Since this is a lightweight utility:
 
 ```
 claude-tools/
+├── .claude/
+│   ├── settings.json                  # Dual hook configuration
+│   └── hooks/
+│       └── compact-traceback.sh       # Unified hook script
 ├── ctools/
-│   ├── __init__.py           # Package exports
-│   └── trace_compactor.py    # Main traceback compactor module
-├── pyproject.toml            # Package metadata and build config
-├── README.md                 # User-facing documentation
-├── CLAUDE.md                 # This file - for Claude Code
-└── .gitignore                # Python-specific ignores
+│   ├── __init__.py                    # Package exports
+│   └── trace_compactor.py             # Main traceback compactor module
+├── tests/
+│   ├── __init__.py
+│   ├── test_trace_compactor.py        # Core tests
+│   └── test_cli.py                    # CLI tests
+├── Makefile                           # Development automation
+├── pyproject.toml                     # Package metadata and build config
+├── README.md                          # User-facing documentation
+├── CLAUDE.md                          # This file - for Claude Code
+└── .gitignore                         # Python-specific ignores
 ```
 
 ## Common Development Tasks
@@ -152,7 +256,28 @@ python3 -m ctools.trace_compactor --stdin --project-root /home/user/myproject < 
 
 ### Testing as a Claude Hook
 
-Create a test settings file:
+The project includes `.claude/settings.json` with **dual hook configuration**:
+
+**Covers both cases:**
+1. **UserPromptSubmit** - Compacts tracebacks in user messages
+2. **PostToolUse** - Compacts tracebacks from Python scripts Claude runs
+
+The configuration uses the unified script at `.claude/hooks/compact-traceback.sh` that automatically handles both hook types.
+
+**To test:**
+
+```bash
+# The hooks are already configured in .claude/settings.json
+# Just make sure the package is installed
+make install
+
+# Restart Claude Code to load the hooks
+# Then try:
+# 1. Paste a traceback in your message - it will be compacted
+# 2. Ask Claude to run a Python script that errors - output will be compacted
+```
+
+**Manual inline configuration (for reference):**
 
 ```bash
 mkdir -p .claude
@@ -164,7 +289,19 @@ cat > .claude/settings.json << 'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.prompt' | python -m ctools.trace_compactor --stdin --project-root \"$CLAUDE_PROJECT_DIR\" | jq -Rs '{\"updatedPrompt\": .}'",
+            "command": "jq -r '.prompt' | claude-trace-compactor --stdin --project-root \"$CLAUDE_PROJECT_DIR\" | jq -Rs '{\"updatedPrompt\": .}'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.stdout // \"\"' | claude-trace-compactor --stdin --project-root \"$CLAUDE_PROJECT_DIR\" | jq -Rs '{\"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"updatedResponse\": {\"stdout\": .}}}'",
             "timeout": 10
           }
         ]
@@ -174,6 +311,11 @@ cat > .claude/settings.json << 'EOF'
 }
 EOF
 ```
+
+**Key Benefits of Dual Hooks:**
+- **User prompts**: You paste long tracebacks → automatically compacted
+- **Tool outputs**: Claude runs Python that errors → output compacted before Claude sees it
+- **Complete coverage**: All tracebacks are compacted, regardless of source
 
 ### Building for Distribution
 
